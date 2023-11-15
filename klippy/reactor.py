@@ -336,13 +336,7 @@ class PollReactor(SelectReactor):
         self._g_dispatch = g_dispatch = greenlet.getcurrent()
         busy = True
         eventtime = self.monotonic()
-        try:
-            logging.info("_dispatch_loop current nice = %d", os.nice(0))
-            val = os.nice(-10)
-            logging.info("_dispatch_loop new nice = %d", val)
-        except:
-            pass
-	while self._process:
+        while self._process:
             timeout = self._check_timers(eventtime, busy)
             busy = False
             res = self._poll.poll(int(math.ceil(timeout * 1000.)))
