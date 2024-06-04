@@ -39,6 +39,14 @@ class PT_uint32:
     is_dynamic_string = False
     max_length = 5
     signed = False
+    def length(self, v):
+        len = 0
+        if v >= 0xc000000 or v < -0x4000000: len += 1
+        if v >= 0x180000 or v < -0x80000:    len += 1
+        if v >= 0x3000 or v < -0x1000:       len += 1
+        if v >= 0x60 or v < -0x20:           len += 1
+        len += 1
+        return len
     def encode(self, out, v):
         if v >= 0xc000000 or v < -0x4000000: out.append((v>>28) & 0x7f | 0x80)
         if v >= 0x180000 or v < -0x80000:    out.append((v>>21) & 0x7f | 0x80)
@@ -168,20 +176,23 @@ class MessageFormat:
         self.param_names = lookup_params(msgformat, enumerations)
         self.param_types = [t for name, t in self.param_names]
         self.name_to_type = dict(self.param_names)
+        self.id_encoder = PT_uint16()
+
     def encode(self, params):
         out = []
-        out.append(self.msgid)
+        self.id_encoder.encode(out, self.msgid)
         for i, t in enumerate(self.param_types):
             t.encode(out, params[i])
         return out
+
     def encode_by_name(self, **params):
         out = []
-        out.append(self.msgid)
+        self.id_encoder.encode(out, self.msgid)
         for name, t in self.param_names:
             t.encode(out, params[name])
         return out
     def parse(self, s, pos):
-        pos += 1
+        msg_id, pos = self.id_encoder.parse(s, pos)
         out = {}
         for name, t in self.param_names:
             v, pos = t.parse(s, pos)
@@ -203,8 +214,9 @@ class OutputFormat:
         self.msgformat = msgformat
         self.debugformat = convert_msg_format(msgformat)
         self.param_types = lookup_output_params(msgformat)
+        self.id_encoder = PT_uint16()
     def parse(self, s, pos):
-        pos += 1
+        msg_id, pos = self.id_encoder.parse(s, pos)
         out = []
         for t in self.param_types:
             v, pos = t.parse(s, pos)
@@ -219,7 +231,8 @@ class OutputFormat:
 class UnknownFormat:
     name = '#unknown'
     def parse(self, s, pos):
-        msgid = s[pos]
+        id_encoder = PT_uint16()
+        msgid, pos = id_encoder.parse(s, pos)
         msg = bytes(bytearray(s))
         return {'#msgid': msgid, '#msg': msg}, len(s)-MESSAGE_TRAILER_SIZE
     def format_params(self, params):
@@ -238,6 +251,7 @@ class MessageParser:
         self.config = {}
         self.version = self.build_versions = ""
         self.raw_identify_data = ""
+        self.id_encoder = PT_uint16()
         self._init_messages(DefaultMessages)
     def _error(self, msg, *params):
         raise error(self.warn_prefix + (msg % params))
@@ -266,7 +280,7 @@ class MessageParser:
         out = ["seq: %02x" % (msgseq,)]
         pos = MESSAGE_HEADER_SIZE
         while 1:
-            msgid = s[pos]
+            msgid, msgid_pos = self.id_encoder.parse(s, pos)
             mid = self.messages_by_id.get(msgid, self.unknown)
             params, pos = mid.parse(s, pos)
             out.append(mid.format_params(params))
@@ -283,9 +297,10 @@ class MessageParser:
             return "%s %s" % (name, msg)
         return str(params)
     def parse(self, s):
-        msgid = s[MESSAGE_HEADER_SIZE]
+        msgid_pos = MESSAGE_HEADER_SIZE
+        msgid, pos = self.id_encoder.parse(s, msgid_pos)
         mid = self.messages_by_id.get(msgid, self.unknown)
-        params, pos = mid.parse(s, MESSAGE_HEADER_SIZE)
+        params, pos = mid.parse(s, msgid_pos)
         if pos != len(s)-MESSAGE_TRAILER_SIZE:
             self._error("Extra data at end of message")
         params['#name'] = mid.name
@@ -380,10 +395,8 @@ class MessageParser:
             elif msgtag in output_tags:
                 msgtype = 'output'
             self.messages.append((msgtag, msgtype, msgformat))
-            if msgtag < -32 or msgtag > 95:
-                self._error("Multi-byte msgtag not supported")
             self.msgtag_by_format[msgformat] = msgtag
-            msgid = msgtag & 0x7f
+            msgid = msgtag
             if msgtype == 'output':
                 self.messages_by_id[msgid] = OutputFormat(msgid, msgformat)
             else:
