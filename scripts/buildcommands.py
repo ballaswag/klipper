@@ -289,12 +289,9 @@ class HandleCommandGeneration:
             if msg not in self.msg_to_id:
                 msgid += 1
                 self.msg_to_id[msg] = msgid
-        if msgid >= 128:
-            # The mcu currently assumes all message ids encode to one byte
-            error("Too many message ids")
     def update_data_dictionary(self, data):
-        # Handle message ids over 96 (they are decoded as negative numbers)
-        msg_to_tag = {msg: msgid if msgid < 96 else msgid - 128
+        # Handle message ids
+        msg_to_tag = {msg: msgid
                       for msg, msgid in self.msg_to_id.items()}
         command_tags = [msg_to_tag[msg]
                         for msgname, msg in self.messages_by_name.items()
@@ -336,8 +333,9 @@ class HandleCommandGeneration:
                         + types.count('PT_buffer'))
             out += "    .num_args=%d," % (num_args,)
         else:
+            id_encoder = msgproto.PT_uint16()
             max_size = min(msgproto.MESSAGE_MAX,
-                           (msgproto.MESSAGE_MIN + 1
+                           (msgproto.MESSAGE_MIN + id_encoder.length(msgid)
                             + sum([t.max_length for t in param_types])))
             out += "    .max_size=%d," % (max_size,)
         return out
@@ -411,7 +409,7 @@ const struct command_parser command_index[] PROGMEM = {
 %s
 };
 
-const uint8_t command_index_size PROGMEM = ARRAY_SIZE(command_index);
+const uint16_t command_index_size PROGMEM = ARRAY_SIZE(command_index);
 """
         return fmt % (externs, index)
     def generate_param_code(self):
